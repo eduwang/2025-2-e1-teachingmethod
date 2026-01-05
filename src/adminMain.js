@@ -300,7 +300,8 @@ async function loadAllDocuments() {
          ...data,
          type: docType, // 추출한 타입을 명시적으로 설정
          createdAt: displayTime, // 토글 제목용: 원본 시간 그대로
-         dateStr: dateStr // 날짜 체크박스용: 정확한 한국 날짜
+         dateStr: dateStr, // 날짜 체크박스용: 정확한 한국 날짜
+         potentialAnalysis: data.potentialAnalysis || null // 분석 결과 포함
        });
 
       // 사용자 정보 수집
@@ -629,36 +630,108 @@ function renderResultCard(doc, user) {
   leftTitle.textContent = "대화 내용";
   leftColumn.appendChild(leftTitle);
 
-  // 대화문을 테이블 형식으로 표시 (pageLP.js 방식)
-  const conversationTable = document.createElement("div");
-  conversationTable.classList.add("conversation-table");
+  // Handsontable 컨테이너 생성
+  const tableContainer = document.createElement("div");
+  tableContainer.id = `admin-table-${doc.id}`;
+  tableContainer.classList.add("conversation-table"); // 다운로드 함수를 위해 클래스 추가
+  tableContainer.style.width = "100%";
+  tableContainer.style.marginTop = "1rem";
   
+  // Handsontable 데이터 준비
+  const hasAnalysis = doc.potentialAnalysis && Array.isArray(doc.potentialAnalysis) && doc.potentialAnalysis.length > 0;
+  const hasTeacherSpeech = Array.isArray(doc.conversation) && doc.conversation.some(e => e.speaker === '교사');
+  const useFourColumns = hasAnalysis && hasTeacherSpeech;
+  
+  let tableData = [];
   if (Array.isArray(doc.conversation)) {
-    doc.conversation.forEach(entry => {
-      const row = document.createElement("div");
-      row.classList.add("conversation-row");
-      if (entry.isUser) row.classList.add("user-entry");
+    tableData = doc.conversation.map(entry => {
+      // potentialAnalysis에서 해당 발화 찾기
+      let tmssr = '';
+      let potential = '';
       
-      const speaker = document.createElement("span");
-      speaker.classList.add("speaker");
-      speaker.textContent = entry.speaker;
+      if (useFourColumns && entry.speaker === '교사') {
+        const matchedDecision = doc.potentialAnalysis.find(d => 
+          d.speaker === entry.speaker && 
+          d.message === entry.message
+        );
+        if (matchedDecision) {
+          tmssr = matchedDecision.tmssr || '';
+          potential = matchedDecision.potential || '';
+        }
+      }
       
-      const message = document.createElement("span");
-      message.classList.add("message");
-      message.textContent = entry.message;
-      
-      row.appendChild(speaker);
-      row.appendChild(message);
-      conversationTable.appendChild(row);
+      // 모든 행이 같은 컬럼 수를 가져야 함
+      if (useFourColumns) {
+        return [entry.speaker, entry.message, tmssr, potential];
+      } else {
+        return [entry.speaker, entry.message];
+      }
     });
   } else {
-    const row = document.createElement("div");
-    row.classList.add("conversation-row");
-    row.innerHTML = '<span class="message">대화 내용 없음</span>';
-    conversationTable.appendChild(row);
+    tableData = [['', '']];
   }
+  
+  // 컬럼 헤더 설정
+  const colHeaders = useFourColumns
+    ? ['발화자', '대화', 'TMSSR', 'Potential']
+    : ['발화자', '대화'];
+  
+  // Handsontable 생성 (비동기로 처리)
+  setTimeout(() => {
+    try {
+      const hot = new Handsontable(tableContainer, {
+        data: tableData,
+        colHeaders: colHeaders,
+        rowHeaders: true,
+        readOnly: true, // 읽기 전용
+        colWidths: useFourColumns
+          ? [60, 300, 60, 60]
+          : [100, 300],
+        minRows: 1,
+        minCols: colHeaders.length,
+        licenseKey: 'non-commercial-and-evaluation',
+        width: '100%',
+        height: 'auto',
+        stretchH: 'all',
+        autoWrapRow: true,
+        autoWrapCol: true,
+        autoRowSize: true,
+        className: 'saved-conversation-table',
+        cells: function(row, col, prop) {
+          const cellProperties = {};
+          if (Array.isArray(doc.conversation) && doc.conversation[row]) {
+            const entry = doc.conversation[row];
+            
+            // 사용자 입력 행 스타일
+            if (entry.isUser) {
+              cellProperties.className = 'user-entry';
+            }
+            
+            // Potential 컬럼 스타일링 (4번째 컬럼, 인덱스 3)
+            if (useFourColumns && col === 3 && entry.speaker === '교사') {
+              const potentialValue = tableData[row][3];
+              if (potentialValue === 'High') {
+                cellProperties.className = (cellProperties.className || '') + ' potential-high';
+              } else if (potentialValue === 'Low') {
+                cellProperties.className = (cellProperties.className || '') + ' potential-low';
+              }
+            }
+          }
+          
+          return cellProperties;
+        }
+      });
+      
+      // Handsontable 인스턴스를 컨테이너에 저장 (나중에 필요할 수 있음)
+      tableContainer._hotInstance = hot;
+    } catch (error) {
+      console.error('Handsontable 생성 실패:', error);
+      // 에러 발생 시 기본 테이블 표시
+      tableContainer.innerHTML = '<p>테이블 로드 실패</p>';
+    }
+  }, 100);
 
-  leftColumn.appendChild(conversationTable);
+  leftColumn.appendChild(tableContainer);
 
   columnsContainer.appendChild(leftColumn);
   
@@ -1061,12 +1134,25 @@ function downloadAsCSV(filteredDocs) {
     const userName = user?.name || '알 수 없음';
     const dateTime = doc.createdAt.toLocaleString('ko-KR');
     
+    // 분석 결과 확인
+    const hasAnalysis = doc.potentialAnalysis && Array.isArray(doc.potentialAnalysis) && doc.potentialAnalysis.length > 0;
+    const hasTeacherSpeech = Array.isArray(doc.conversation) && doc.conversation.some(e => e.speaker === '교사');
+    const useAnalysisColumns = hasAnalysis && hasTeacherSpeech;
+    
     // 헤더 행 추가
     if (index === 0) {
       if (doc.type === 'lessonPlayFeedback') {
-        csvContent += '사용자,날짜/시간,화자,메시지,AI 피드백\n';
+        if (useAnalysisColumns) {
+          csvContent += '사용자,날짜/시간,화자,메시지,TMSSR,Potential,AI 피드백\n';
+        } else {
+          csvContent += '사용자,날짜/시간,화자,메시지,AI 피드백\n';
+        }
       } else {
-        csvContent += '사용자,날짜/시간,화자,메시지\n';
+        if (useAnalysisColumns) {
+          csvContent += '사용자,날짜/시간,화자,메시지,TMSSR,Potential\n';
+        } else {
+          csvContent += '사용자,날짜/시간,화자,메시지\n';
+        }
       }
     }
     
@@ -1079,6 +1165,24 @@ function downloadAsCSV(filteredDocs) {
           `"${entry.speaker}"`,
           `"${entry.message.replace(/"/g, '""')}"`
         ];
+        
+        // TMSSR과 Potential 추가
+        if (useAnalysisColumns && entry.speaker === '교사') {
+          const matchedDecision = doc.potentialAnalysis.find(d => 
+            d.speaker === entry.speaker && 
+            d.message === entry.message
+          );
+          if (matchedDecision) {
+            row.push(`"${matchedDecision.tmssr || ''}"`);
+            row.push(`"${matchedDecision.potential || ''}"`);
+          } else {
+            row.push('""');
+            row.push('""');
+          }
+        } else if (useAnalysisColumns) {
+          row.push('""');
+          row.push('""');
+        }
         
         // 피드백이 있는 경우 첫 번째 행에만 피드백 추가
         if (doc.type === 'lessonPlayFeedback' && convIndex === 0) {
@@ -1119,11 +1223,24 @@ function downloadSingleCSV(doc) {
   
   let csvContent = '';
   
+  // 분석 결과 확인
+  const hasAnalysis = doc.potentialAnalysis && Array.isArray(doc.potentialAnalysis) && doc.potentialAnalysis.length > 0;
+  const hasTeacherSpeech = Array.isArray(doc.conversation) && doc.conversation.some(e => e.speaker === '교사');
+  const useAnalysisColumns = hasAnalysis && hasTeacherSpeech;
+  
   // 헤더 행 추가
   if (doc.type === 'lessonPlayFeedback') {
-    csvContent += '사용자,날짜/시간,화자,메시지,AI 피드백\n';
+    if (useAnalysisColumns) {
+      csvContent += '사용자,날짜/시간,화자,메시지,TMSSR,Potential,AI 피드백\n';
+    } else {
+      csvContent += '사용자,날짜/시간,화자,메시지,AI 피드백\n';
+    }
   } else {
-    csvContent += '사용자,날짜/시간,화자,메시지\n';
+    if (useAnalysisColumns) {
+      csvContent += '사용자,날짜/시간,화자,메시지,TMSSR,Potential\n';
+    } else {
+      csvContent += '사용자,날짜/시간,화자,메시지\n';
+    }
   }
   
   // 대화 내용을 CSV로 변환
@@ -1135,6 +1252,24 @@ function downloadSingleCSV(doc) {
         `"${entry.speaker}"`,
         `"${entry.message.replace(/"/g, '""')}"`
       ];
+      
+      // TMSSR과 Potential 추가
+      if (useAnalysisColumns && entry.speaker === '교사') {
+        const matchedDecision = doc.potentialAnalysis.find(d => 
+          d.speaker === entry.speaker && 
+          d.message === entry.message
+        );
+        if (matchedDecision) {
+          row.push(`"${matchedDecision.tmssr || ''}"`);
+          row.push(`"${matchedDecision.potential || ''}"`);
+        } else {
+          row.push('""');
+          row.push('""');
+        }
+      } else if (useAnalysisColumns) {
+        row.push('""');
+        row.push('""');
+      }
       
       // 피드백이 있는 경우 첫 번째 행에만 피드백 추가
       if (doc.type === 'lessonPlayFeedback' && convIndex === 0) {
@@ -1239,11 +1374,24 @@ async function downloadAllAsIndividualCSV(filteredDocs) {
       
       let csvContent = '';
       
+      // 분석 결과 확인
+      const hasAnalysis = doc.potentialAnalysis && Array.isArray(doc.potentialAnalysis) && doc.potentialAnalysis.length > 0;
+      const hasTeacherSpeech = Array.isArray(doc.conversation) && doc.conversation.some(e => e.speaker === '교사');
+      const useAnalysisColumns = hasAnalysis && hasTeacherSpeech;
+      
       // 헤더 행 추가
       if (doc.type === 'lessonPlayFeedback') {
-        csvContent += '사용자,날짜/시간,화자,메시지,AI 피드백\n';
+        if (useAnalysisColumns) {
+          csvContent += '사용자,날짜/시간,화자,메시지,TMSSR,Potential,AI 피드백\n';
+        } else {
+          csvContent += '사용자,날짜/시간,화자,메시지,AI 피드백\n';
+        }
       } else {
-        csvContent += '사용자,날짜/시간,화자,메시지\n';
+        if (useAnalysisColumns) {
+          csvContent += '사용자,날짜/시간,화자,메시지,TMSSR,Potential\n';
+        } else {
+          csvContent += '사용자,날짜/시간,화자,메시지\n';
+        }
       }
       
       // 대화 내용을 CSV로 변환
@@ -1255,6 +1403,24 @@ async function downloadAllAsIndividualCSV(filteredDocs) {
             `"${entry.speaker}"`,
             `"${entry.message.replace(/"/g, '""')}"`
           ];
+          
+          // TMSSR과 Potential 추가
+          if (useAnalysisColumns && entry.speaker === '교사') {
+            const matchedDecision = doc.potentialAnalysis.find(d => 
+              d.speaker === entry.speaker && 
+              d.message === entry.message
+            );
+            if (matchedDecision) {
+              row.push(`"${matchedDecision.tmssr || ''}"`);
+              row.push(`"${matchedDecision.potential || ''}"`);
+            } else {
+              row.push('""');
+              row.push('""');
+            }
+          } else if (useAnalysisColumns) {
+            row.push('""');
+            row.push('""');
+          }
           
           // 피드백이 있는 경우 첫 번째 행에만 피드백 추가
           if (doc.type === 'lessonPlayFeedback' && convIndex === 0) {

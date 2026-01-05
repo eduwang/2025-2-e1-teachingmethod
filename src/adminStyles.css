@@ -675,47 +675,38 @@ html, body {
   text-align: center;
 }
 
-/* 대화문 테이블 스타일 (pageLP.js 방식) */
+/* 대화문 테이블 스타일 (Handsontable 사용) */
 .conversation-table {
   margin-bottom: 1rem;
 }
 
-.conversation-row {
-  display: grid;
-  grid-template-columns: 120px 1fr;
-  gap: 1rem;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid #f3f4f6;
+/* Handsontable 스타일 */
+.saved-conversation-table {
+  font-family: 'Noto Sans KR', sans-serif;
 }
 
-.conversation-row:last-child {
-  border-bottom: none;
+.saved-conversation-table .ht_master .wtHolder {
+  overflow: visible;
 }
 
-.conversation-row .speaker {
-  font-weight: 700;
-  color: #1e40af;
-  text-align: center;
-  background-color: #f8fafc;
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  font-size: 0.9rem;
+/* 사용자 입력 행 스타일 */
+.saved-conversation-table .user-entry {
+  background-color: #f0fdf4 !important;
 }
 
-.conversation-row .message {
-  color: #374151;
-  line-height: 1.5;
-  padding: 0.5rem;
+.saved-conversation-table .user-entry td {
+  background-color: #f0fdf4 !important;
 }
 
-.conversation-row.user-entry .speaker {
-  background-color: #dcfce7;
-  color: #166534;
+/* Potential 값에 따른 색상 */
+.saved-conversation-table .potential-high {
+  color: #10b981 !important;
+  font-weight: 600 !important;
 }
 
-.conversation-row.user-entry .message {
-  background-color: #f0fdf4;
-  border-radius: 0.5rem;
+.saved-conversation-table .potential-low {
+  color: #ef4444 !important;
+  font-weight: 600 !important;
 }
 
 /* 피드백 스타일 */
